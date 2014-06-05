@@ -108,7 +108,7 @@ def rotateImage(Image, RotationAngle = 0.0):
     Image_ = Image
     if RotationAngle%90.0 == 0:
         k = RotationAngle//90.0
-        Image_ = np.rot90(np.rot90(Image_), k)
+        Image_ = np.rot90(Image_, k)
     elif RotationAngle != 0:
         center=tuple(np.array(Image_.shape[0:2])/2)
         rot_mat = cv2.getRotationMatrix2D(center, RotationAngle,1.0)
@@ -127,60 +127,145 @@ def readCalibration(CalibFile):
     TVecs = parameters['TVecs']
     return ImageSize, SquareSize, CameraMatrix, DistCoefs, RVecs, TVecs
     
+def findColorbarPyramid(Image, Colorbar, RotationAngle = None, NearCenter = True, NoLevels = 4, FinalLevel = 1):
+    for i in range(NoLevels):
+        if i == 0:
+            PyramidImages = [Image]
+            PyramidColorbars = [Colorbar]
+        else:
+            PyramidImages.append(cv2.pyrDown(PyramidImages[i-1]))
+            PyramidColorbars.append(cv2.pyrDown(PyramidColorbars[i-1]))
+
+    for i in range(NoLevels-1, -1, -1):
+        if i == NoLevels-1:
+            corrMap = cv2.matchTemplate(PyramidImages[i], PyramidColorbars[i], cv2.TM_CCOEFF_NORMED)
+            _, maxVal, _, maxLoc = cv2.minMaxLoc(corrMap)
+            if RotationAngle == None:
+                corrMap180 = cv2.matchTemplate(np.rot90(PyramidImages[i],2).astype(np.uint8), PyramidColorbars[i], cv2.TM_CCOEFF_NORMED)
+                _, maxVal180, _, maxLoc180 = cv2.minMaxLoc(corrMap180)
+                Radius = np.sqrt((maxLoc[0]-PyramidImages[i].shape[1]/2)**2 + (maxLoc[1]-PyramidImages[i].shape[0]/2)**2)
+                Radius180 = np.sqrt((maxLoc180[0]-PyramidImages[i].shape[1]/2)**2 + (maxLoc180[1]-PyramidImages[i].shape[0]/2)**2)
+                if (Radius/Radius180 > 0.8 and Radius/Radius180 < 1.2) or \
+                   (Radius180/Radius > 0.8 and Radius180/Radius < 1.2):
+                    # similar distance: very likely cannot find colorbar
+                    print('#### Cannot find a colorbar ####')
+                    return None, None, None
+                if (NearCenter and  maxVal/Radius < maxVal180/Radius180) or \
+                   ((not NearCenter) and maxVal < maxVal180):
+                    PyramidImages = [np.rot90(Img,2) for Img in PyramidImages]
+                    maxVal, maxVal180 = maxVal180, maxVal
+                    maxLoc, maxLoc180 = maxLoc180, maxLoc
+                    corrMap, corrMap180 = corrMap180, corrMap
+                    RotationAngle = 180
+                else:
+                    RotationAngle = 0
+            # recalculate max position in image space
+            maxLocImage = (maxLoc[0] + PyramidColorbars[i].shape[1]//2, 
+                           maxLoc[1] + PyramidColorbars[i].shape[0]//2)
+            # rescale to location in level-0 image
+            maxLocImage = (maxLocImage[0]*2**i, maxLocImage[1]*2**i)
+        else:
+            maxLocEst = (maxLocImage[0]//2**i, maxLocImage[1]//2**i)
+            searchRange = (6,6)
+                
+            CroppedHalfWidth  = PyramidColorbars[i].shape[1]//2 + searchRange[0]
+            CroppedHalfHeight = PyramidColorbars[i].shape[0]//2 + searchRange[1]
+            CropedImage = PyramidImages[i][maxLocEst[1]-CroppedHalfHeight:maxLocEst[1]+CroppedHalfHeight,\
+                                           maxLocEst[0]-CroppedHalfWidth: maxLocEst[0]+CroppedHalfWidth ,:]
+#            plt.figure()
+#            plt.imshow(CropedImage)
+
+            corrMap = cv2.matchTemplate(CropedImage.astype(np.uint8), PyramidColorbars[i], cv2.TM_CCOEFF_NORMED)
+            _, maxVal, _, maxLoc = cv2.minMaxLoc(corrMap)
+            
+            # recalculate max position in cropped image space
+            maxLocImageCropped = (maxLoc[0] + PyramidColorbars[i].shape[1]//2, 
+                                  maxLoc[1] + PyramidColorbars[i].shape[0]//2)
+            # recalculate max position in full image space
+            maxLocImage = (maxLocEst[0]-CroppedHalfWidth  + maxLocImageCropped[0], \
+                           maxLocEst[1]-CroppedHalfHeight + maxLocImageCropped[1])
+            # rescale to location in level-0 image
+            maxLocImage = (maxLocImage[0]*2**i, maxLocImage[1]*2**i)
+        if i ==  FinalLevel:
+            # Skip early to save time
+            break
+        
+    print('maxVal, maxLocImage, RotationAngle =', maxVal, maxLocImage, RotationAngle)
+    return maxVal, maxLocImage, RotationAngle
+
 def correctDistortionAndColor(Arg):
-    ImageFile_, UndistMapX, UndistMapY, RotationAngle, ColCardMapX, ColCardMapY, Colors, OutputFile = Arg
+    ImageFile_, UndistMapX, UndistMapY, P24ColorCardCaptured, Colors, OutputFile = Arg
     Image = cv2.imread(ImageFile_)[:,:,::-1] # read and convert to R-G-B image
     
     if UndistMapX != None:
         Image = cv2.remap(Image.astype(np.uint8), UndistMapX, UndistMapY, cv2.INTER_CUBIC)
 
-    Image = rotateImage(Image, RotationAngle)
-    RectifiedColorCard = cv2.remap(Image.astype(np.uint8), ColCardMapX, ColCardMapY, cv2.INTER_CUBIC)
-    
-    Captured_Colors = np.zeros([3,24])
-    SquareSize2 = int(RectifiedColorCard.shape[0]/4)
-    HalfSquareSize2 = int(SquareSize2/2)
-    for i in range(24):
-        Row = int(i/6)
-        Col = i - Row*6
-        rr = Row*SquareSize2 + HalfSquareSize2
-        cc = Col*SquareSize2 + HalfSquareSize2
-        Captured_R = RectifiedColorCard[rr-10:rr+10, cc-10:cc+10, 0].astype(np.float)
-        Captured_G = RectifiedColorCard[rr-10:rr+10, cc-10:cc+10, 1].astype(np.float)
-        Captured_B = RectifiedColorCard[rr-10:rr+10, cc-10:cc+10, 2].astype(np.float)
-        Captured_R = np.sum(Captured_R)/Captured_R.size
-        Captured_G = np.sum(Captured_G)/Captured_G.size
-        Captured_B = np.sum(Captured_B)/Captured_B.size
-        Captured_Colors[0,i] = Captured_R
-        Captured_Colors[1,i] = Captured_G
-        Captured_Colors[2,i] = Captured_B
+    RotationAngle = 0
+    if Image.shape[0] > Image.shape[1]:
+        RotationAngle = 90
+        Image = rotateImage(Image, RotationAngle)
 
-    # initial values
-    ColorMatrix = np.eye(3)
-    ColorConstant = np.zeros([3,1])
-    ColorGamma = np.ones([3,1])
- 
-    Arg2 = np.zeros([9 + 3 + 3])
-    Arg2[:9] = ColorMatrix.reshape([9])
-    Arg2[9:12] = ColorConstant.reshape([3])
-    Arg2[12:15] = ColorGamma.reshape([3])
+    maxVal, maxLoc, RotationAngle2 = findColorbarPyramid(Image.astype(np.uint8), P24ColorCardCaptured.astype(np.uint8))
+    if RotationAngle2 != None:
+        Image = rotateImage(Image, RotationAngle2)
+        ColorCardCaptured = Image[maxLoc[1]-P24ColorCardCaptured.shape[0]//2:maxLoc[1]+P24ColorCardCaptured.shape[0]//2, \
+                                  maxLoc[0]-P24ColorCardCaptured.shape[1]//2:maxLoc[0]+P24ColorCardCaptured.shape[1]//2]
+        
+        Captured_Colors = np.zeros([3,24])
+        STD_Colors = np.zeros([24])
+        SquareSize2 = int(ColorCardCaptured.shape[0]/4)
+        HalfSquareSize2 = int(SquareSize2/2)
+        for i in range(24):
+            Row = int(i/6)
+            Col = i - Row*6
+            rr = Row*SquareSize2 + HalfSquareSize2
+            cc = Col*SquareSize2 + HalfSquareSize2
+            Captured_R = ColorCardCaptured[rr-10:rr+10, cc-10:cc+10, 0].astype(np.float)
+            Captured_G = ColorCardCaptured[rr-10:rr+10, cc-10:cc+10, 1].astype(np.float)
+            Captured_B = ColorCardCaptured[rr-10:rr+10, cc-10:cc+10, 2].astype(np.float)
+            STD_Colors[i] = np.std(Captured_R) + np.std(Captured_G) + np.std(Captured_B)
+            Captured_R = np.sum(Captured_R)/Captured_R.size
+            Captured_G = np.sum(Captured_G)/Captured_G.size
+            Captured_B = np.sum(Captured_B)/Captured_B.size
+            Captured_Colors[0,i] = Captured_R
+            Captured_Colors[1,i] = Captured_G
+            Captured_Colors[2,i] = Captured_B
     
-    ArgRefined, _ = optimize.leastsq(getColorMatchingErrorVectorised, Arg2, args=(Colors, Captured_Colors), maxfev=10000)
-    
-    ColorMatrix = ArgRefined[:9].reshape([3,3])
-    ColorConstant = ArgRefined[9:12].reshape([3,1])
-    ColorGamma = ArgRefined[12:15]
-    
-    ImageCorrected = correctColorVectorised(Image.astype(np.float), ColorMatrix, ColorConstant, ColorGamma)
-    ImageCorrected[np.where(ImageCorrected < 0)] = 0
-    ImageCorrected[np.where(ImageCorrected > 255)] = 255
-
+        # initial values
+        ColorMatrix = np.eye(3)
+        ColorConstant = np.zeros([3,1])
+        ColorGamma = np.ones([3,1])
+     
+        Arg2 = np.zeros([9 + 3 + 3])
+        Arg2[:9] = ColorMatrix.reshape([9])
+        Arg2[9:12] = ColorConstant.reshape([3])
+        Arg2[12:15] = ColorGamma.reshape([3])
+        
+        ArgRefined, _ = optimize.leastsq(getColorMatchingErrorVectorised, Arg2, args=(Colors, Captured_Colors), maxfev=10000)
+        
+        ErrrorList = getColorMatchingErrorVectorised(ArgRefined, Colors, Captured_Colors)
+        Error = np.sum(np.asarray(ErrrorList))
+        
+        ColorMatrix = ArgRefined[:9].reshape([3,3])
+        ColorConstant = ArgRefined[9:12].reshape([3,1])
+        ColorGamma = ArgRefined[12:15]
+        
+        ImageCorrected = correctColorVectorised(Image.astype(np.float), ColorMatrix, ColorConstant, ColorGamma)
+        ImageCorrected[np.where(ImageCorrected < 0)] = 0
+        ImageCorrected[np.where(ImageCorrected > 255)] = 255
+    else:
+        print('Skip color correction of', ImageFile_)
+        ImageCorrected = Image
+        maxLoc = [-1.0, -1.0]
+        Error = -1.0
+        
     OutputPath = os.path.dirname(OutputFile)
     if not os.path.exists(OutputPath):
         print('Make', OutputPath)
         os.makedirs(OutputPath)
     cv2.imwrite(OutputFile, np.uint8(ImageCorrected[:,:,2::-1])) # convert to B-G-R image and save
     print('Saved', OutputFile)
+    return Error, maxLoc
 
 
 def main(argv):
@@ -189,10 +274,10 @@ def main(argv):
                     '-o <output file>\n' + \
                  'Example:\n' + \
                  "$ ./correctDistortionAndColor.py -i /home/chuong/Data/GC03L-temp/corrected/IMG_6425.JPG -c /home/chuong/Data/GC03L-temp/corrected/CameraTrax_24ColorCard_2x3in.png -r \n" +\
-                 "$ ./correctDistortionAndColor.py -f /mnt/phenocam/a_data/TimeStreams/BorevitzTest/BVZ0018/BVZ0018-GC04L~fullres-orig/ -k /mnt/phenocam/a_data/TimeStreams/BorevitzTest/BVZ0018/BVZ0018-GC04L~fullres-corr/calib_param_700Dcam.yml -c /mnt/phenocam/a_data/TimeStreams/BorevitzTest/BVZ0018/BVZ0018-GC04L~fullres-corr/CameraTrax_24ColorCard_2x3in.png -r /mnt/phenocam/a_data/TimeStreams/BorevitzTest/BVZ0018/BVZ0018-GC04L~fullres-corr/ColorbarRectangle.yml -o /mnt/phenocam/a_data/TimeStreams/BorevitzTest/BVZ0018/BVZ0018-GC04L~fullres-corr/ -j 12"
+                 "$ ./correctDistortionAndColor.py -f /home/chuong/Data/GC03L-temp/corrected/ -p IMG*JPG -c /home/chuong/Data/GC03L-temp/corrected/CameraTrax_24ColorCard_2x3in.png -o /home/chuong/Data/GC03L-temp/rectified/"
     try:
-        opts, args = getopt.getopt(argv,"hi:f:k:r:c:o:j:",\
-            ["ifile=","ifolder=","calibfile=","colorrectfile=","colorcard=","ofolder=","jobs="])
+        opts, args = getopt.getopt(argv,"hi:f:k:c:g:o:j:",\
+            ["ifile=","ifolder=","calibfile=","captured-colorcard=","groundtruth-colorcard=","ofolder=","jobs="])
     except getopt.GetoptError:
         print(HelpString)
         sys.exit(2)
@@ -203,8 +288,8 @@ def main(argv):
     ImageFile = ''
     InputRootFolder = ''
     OutputFolder = ''
-    ColorCardImage = 'CameraTrax_24ColorCard_2x3in.png'
-    ColorCardRectangle = 'ColorbarRectangle.yml'
+    ColorCardCapturedImage = 'CameraTrax_24ColorCard_2x3in.png'
+    ColorCardTrueImage = 'CameraTrax_24ColorCard_2x3inCaptured.png'
     CalibFile = ''
     NoJobs = 1
     for opt, arg in opts:
@@ -215,10 +300,10 @@ def main(argv):
             ImageFile = arg
         elif opt in ("-f", "--ifolder"):
             InputRootFolder = arg
-        elif opt in ("-r", "--colorrectfile"):
-            ColorCardRectangle = arg
-        elif opt in ("-c", "--colorcard"):
-            ColorCardImage = arg
+        elif opt in ("-c", "--captured-colorcard"):
+            ColorCardCapturedImage = arg
+        elif opt in ("-g", "--groundtruth-colorcard"):
+            ColorCardTrueImage = arg
         elif opt in ("-k", "--calibfile"):
             CalibFile = arg
         elif opt in ("-o", "--ofolder"):
@@ -236,18 +321,12 @@ def main(argv):
         UndistMapX, UndistMapY = cv2.initUndistortRectifyMap(CameraMatrix, DistCoefs, \
             None, CameraMatrix, ImageSize, cv2.CV_32FC1)    
             
-    RectData = cv2yml.yml2dic(os.path.join(OutputFolder, ColorCardRectangle))
-    RotationAngle = RectData['RotationAngle']
-    Rect = RectData['Colorbar'].tolist()
-    print('Rect =', Rect)
-    Centre, Width, Height, Angle = getRectangleParamters(Rect)
-    print(Centre, Width, Height, Angle)
-    ColCardMapX, ColCardMapY = createMap(Centre, Width, Height, Angle)
-
-    P24ColorCard = cv2.imread(ColorCardImage)[:,:,::-1] # read and convert to R-G-B image
-    SquareSize = int(P24ColorCard.shape[0]/4)
+    P24ColorCardTrue = cv2.imread(ColorCardTrueImage)[:,:,::-1] # read and convert to R-G-B image
+    SquareSize = int(P24ColorCardTrue.shape[0]/4)
     HalfSquareSize = int(SquareSize/2)
     
+    P24ColorCardCaptured = cv2.imread(ColorCardCapturedImage)[:,:,::-1] # read and convert to R-G-B image
+
     # collect 24 colours from the captured color card:
     Colors = np.zeros([3,24])
     for i in range(24):
@@ -255,9 +334,9 @@ def main(argv):
         Col = i - Row*6
         rr = Row*SquareSize + HalfSquareSize
         cc = Col*SquareSize + HalfSquareSize
-        Colors[0,i] = P24ColorCard[rr,cc,0]
-        Colors[1,i] = P24ColorCard[rr,cc,1]
-        Colors[2,i] = P24ColorCard[rr,cc,2]
+        Colors[0,i] = P24ColorCardTrue[rr,cc,0]
+        Colors[1,i] = P24ColorCardTrue[rr,cc,1]
+        Colors[2,i] = P24ColorCardTrue[rr,cc,2]
     print('Colors = \n', Colors)
     
     if len(ImageFile):
@@ -277,11 +356,21 @@ def main(argv):
             ImageName = os.path.basename(ImageFile_)
             OutputPath = os.path.join(OutputFolder, ImagePath[len(InputRootFolder):])
             OutputFile = os.path.join(OutputPath, ImageName)
-        ArgList.append([ImageFile_, UndistMapX, UndistMapY, RotationAngle, ColCardMapX, ColCardMapY, Colors, OutputFile])
-   
+        ArgList.append([ImageFile_, UndistMapX, UndistMapY, P24ColorCardCaptured, Colors, OutputFile])
+#        if i == 10:
+#            break
     Process = Pool(processes = NoJobs)
-    Process.map(correctDistortionAndColor, ArgList)
-          
+    import time
+    time1 = time.time()
+    Results = Process.map(correctDistortionAndColor, ArgList)
+    time2 = time.time()
+    InfoFile = os.path.join(OutputFolder, 'ColorCorrectionInfo.txt')
+    with open(InfoFile, 'w') as myfile:
+        myfile.write('It took %0.3f seconds to process %d files using %d processes\n' % (time2-time1, len(Results), NoJobs))
+        myfile.write('ImageFileName; CorrectionError(-1.0 for undetected colorbar); ColorPosition-X; ColorbarPosition-Y\n')
+        for Result,Arg in zip(Results, ArgList):
+            myfile.write('%s; %f; %f; %f\n' %(Arg[0], Result[0], Result[1][0], Result[1][1]) )
+    print('Finished. Saved color correction info to', InfoFile)
 if __name__ == "__main__":
    main(sys.argv[1:])
 
