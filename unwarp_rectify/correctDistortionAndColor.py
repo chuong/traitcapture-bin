@@ -127,7 +127,33 @@ def readCalibration(CalibFile):
     TVecs = parameters['TVecs']
     return ImageSize, SquareSize, CameraMatrix, DistCoefs, RVecs, TVecs
     
-def findColorbarPyramid(Image, Colorbar, RotationAngle = None, NearCenter = True, NoLevels = 4, FinalLevel = 1):
+def matchTemplate(Image, Template, SearchTopLeftCorner, SearchBottomRightCorner):
+    CropedImage = Image[SearchTopLeftCorner[1]:SearchBottomRightCorner[1], SearchTopLeftCorner[0]:SearchBottomRightCorner[0]]
+    corrMap = cv2.matchTemplate(CropedImage.astype(np.uint8), Template.astype(np.uint8), cv2.TM_CCOEFF_NORMED)
+    _, maxVal, _, maxLoc = cv2.minMaxLoc(corrMap)
+    # recalculate max position in cropped image space
+    matchedLocImageCropped = (maxLoc[0] + Template.shape[1]//2, 
+                              maxLoc[1] + Template.shape[0]//2)
+    # recalculate max position in full image space
+    matchedLocImage = (matchedLocImageCropped[0] + SearchTopLeftCorner[0], \
+                       matchedLocImageCropped[1] + SearchTopLeftCorner[1])
+#    plt.figure()
+#    plt.imshow(corrMap)
+#    plt.hold(True)
+#    plt.plot([maxLoc[0]], [maxLoc[1]], 'o')
+#    plt.figure()
+#    plt.imshow(CropedImage)
+#    plt.hold(True)
+#    plt.plot([matchedLocImageCropped[0]], [matchedLocImageCropped[1]], 'o')
+#    plt.figure()
+#    plt.imshow(Image)
+#    plt.hold(True)
+#    plt.plot([matchedLocImage[0]], [matchedLocImage[1]], 'o')
+#    plt.show()
+
+    return matchedLocImage, maxVal, maxLoc, corrMap
+    
+def findColorbarPyramid(Image, Colorbar, RotationAngle = None, SearchRange = 0.5, NoLevels = 5, FinalLevel = 1):
     for i in range(NoLevels):
         if i == 0:
             PyramidImages = [Image]
@@ -138,60 +164,67 @@ def findColorbarPyramid(Image, Colorbar, RotationAngle = None, NearCenter = True
 
     for i in range(NoLevels-1, -1, -1):
         if i == NoLevels-1:
-            corrMap = cv2.matchTemplate(PyramidImages[i], PyramidColorbars[i], cv2.TM_CCOEFF_NORMED)
-            _, maxVal, _, maxLoc = cv2.minMaxLoc(corrMap)
+            maxLocEst = [PyramidImages[i].shape[1]//2, PyramidImages[i].shape[0]//2] # image center
+            if SearchRange > 0 and SearchRange <= 1.0:
+                CroppedHalfWidth  = SearchRange*PyramidImages[i].shape[1]//2 
+                CroppedHalfHeight = SearchRange*PyramidImages[i].shape[0]//2
+            else:
+                CroppedHalfWidth  = PyramidImages[i].shape[1]//2 
+                CroppedHalfHeight = PyramidImages[i].shape[0]//2
+            SearchTopLeftCorner     = [maxLocEst[0]-CroppedHalfWidth, maxLocEst[1]-CroppedHalfHeight]
+            SearchBottomRightCorner = [maxLocEst[0]+CroppedHalfWidth, maxLocEst[1]+CroppedHalfHeight]
+
+            matchedLocImage, maxVal, maxLoc, corrMap = matchTemplate(PyramidImages[i], PyramidColorbars[i], SearchTopLeftCorner, SearchBottomRightCorner)
+
             if RotationAngle == None:
-                corrMap180 = cv2.matchTemplate(np.rot90(PyramidImages[i],2).astype(np.uint8), PyramidColorbars[i], cv2.TM_CCOEFF_NORMED)
-                _, maxVal180, _, maxLoc180 = cv2.minMaxLoc(corrMap180)
-                Radius = np.sqrt((maxLoc[0]-PyramidImages[i].shape[1]/2)**2 + (maxLoc[1]-PyramidImages[i].shape[0]/2)**2)
-                Radius180 = np.sqrt((maxLoc180[0]-PyramidImages[i].shape[1]/2)**2 + (maxLoc180[1]-PyramidImages[i].shape[0]/2)**2)
-                if (Radius/Radius180 > 0.8 and Radius/Radius180 < 1.2) or \
-                   (Radius180/Radius > 0.8 and Radius180/Radius < 1.2):
+                matchedLocImage180, maxVal180, maxLoc180, corrMap180 = matchTemplate(np.rot90(PyramidImages[i],2).astype(np.uint8), PyramidColorbars[i], SearchTopLeftCorner, SearchBottomRightCorner)
+                if maxVal < 0.3 and maxVal180 < 0.3:
                     # similar distance: very likely cannot find colorbar
                     print('#### Cannot find a colorbar ####')
-                    return None, None, None
-                if (NearCenter and  maxVal/Radius < maxVal180/Radius180) or \
-                   ((not NearCenter) and maxVal < maxVal180):
+#                    return None, None, None
+                if maxVal < maxVal180:
                     PyramidImages = [np.rot90(Img,2) for Img in PyramidImages]
+                    matchedLocImage, matchedLocImage180 = matchedLocImage180, matchedLocImage
                     maxVal, maxVal180 = maxVal180, maxVal
                     maxLoc, maxLoc180 = maxLoc180, maxLoc
                     corrMap, corrMap180 = corrMap180, corrMap
                     RotationAngle = 180
                 else:
                     RotationAngle = 0
-            # recalculate max position in image space
-            maxLocImage = (maxLoc[0] + PyramidColorbars[i].shape[1]//2, 
-                           maxLoc[1] + PyramidColorbars[i].shape[0]//2)
             # rescale to location in level-0 image
-            maxLocImage = (maxLocImage[0]*2**i, maxLocImage[1]*2**i)
+            matchedLocImage0 = (matchedLocImage[0]*2**i, matchedLocImage[1]*2**i)
         else:
-            maxLocEst = (maxLocImage[0]//2**i, maxLocImage[1]//2**i)
+            maxLocEst = (matchedLocImage0[0]//2**i, matchedLocImage0[1]//2**i)
             searchRange = (6,6)
                 
-            CroppedHalfWidth  = PyramidColorbars[i].shape[1]//2 + searchRange[0]
-            CroppedHalfHeight = PyramidColorbars[i].shape[0]//2 + searchRange[1]
-            CropedImage = PyramidImages[i][maxLocEst[1]-CroppedHalfHeight:maxLocEst[1]+CroppedHalfHeight,\
-                                           maxLocEst[0]-CroppedHalfWidth: maxLocEst[0]+CroppedHalfWidth ,:]
-#            plt.figure()
-#            plt.imshow(CropedImage)
-
-            corrMap = cv2.matchTemplate(CropedImage.astype(np.uint8), PyramidColorbars[i], cv2.TM_CCOEFF_NORMED)
-            _, maxVal, _, maxLoc = cv2.minMaxLoc(corrMap)
+            CroppedHalfWidth  = PyramidColorbars[i].shape[1]//2 + searchRange[1]//2
+            CroppedHalfHeight = PyramidColorbars[i].shape[0]//2 + searchRange[0]//2
+            SearchTopLeftCorner = [maxLocEst[0]-CroppedHalfWidth, maxLocEst[1]-CroppedHalfHeight]
+            SearchBottomRightCorner = [maxLocEst[0]+CroppedHalfWidth, maxLocEst[1]+CroppedHalfHeight]
             
-            # recalculate max position in cropped image space
-            maxLocImageCropped = (maxLoc[0] + PyramidColorbars[i].shape[1]//2, 
-                                  maxLoc[1] + PyramidColorbars[i].shape[0]//2)
-            # recalculate max position in full image space
-            maxLocImage = (maxLocEst[0]-CroppedHalfWidth  + maxLocImageCropped[0], \
-                           maxLocEst[1]-CroppedHalfHeight + maxLocImageCropped[1])
+            matchedLocImage, maxVal, maxLoc, corrMap = matchTemplate(PyramidImages[i], PyramidColorbars[i], SearchTopLeftCorner, SearchBottomRightCorner)
             # rescale to location in level-0 image
-            maxLocImage = (maxLocImage[0]*2**i, maxLocImage[1]*2**i)
+            matchedLocImage0 = (matchedLocImage[0]*2**i, matchedLocImage[1]*2**i)
+
+#        plt.figure()
+#        plt.imshow(corrMap)
+#        plt.hold(True)
+#        plt.plot([maxLoc[0]], [maxLoc[1]], 'o')
+#        plt.title('maxVal = %f' %maxVal)
+#        
+#        plt.figure()
+#        plt.imshow(PyramidImages[i])
+#        plt.hold(True)
+#        plt.plot([matchedLocImage[0]], [matchedLocImage[1]], 'o')
+#        plt.title('Level = %d, RotationAngle = %f' %(i, RotationAngle))
+#        plt.show()
+
         if i ==  FinalLevel:
             # Skip early to save time
             break
         
-    print('maxVal, maxLocImage, RotationAngle =', maxVal, maxLocImage, RotationAngle)
-    return maxVal, maxLocImage, RotationAngle
+    print('maxVal, maxLocImage, RotationAngle =', maxVal, matchedLocImage0, RotationAngle)
+    return maxVal, matchedLocImage0, RotationAngle
 
 def correctDistortionAndColor(Arg):
     ImageFile_, UndistMapX, UndistMapY, P24ColorCardCaptured, Colors, OutputFile = Arg
@@ -205,11 +238,11 @@ def correctDistortionAndColor(Arg):
         RotationAngle = 90
         Image = rotateImage(Image, RotationAngle)
 
-    maxVal, maxLoc, RotationAngle2 = findColorbarPyramid(Image.astype(np.uint8), P24ColorCardCaptured.astype(np.uint8))
-    if RotationAngle2 != None:
+    maxVal, matchedLoc, RotationAngle2 = findColorbarPyramid(Image.astype(np.uint8), P24ColorCardCaptured.astype(np.uint8))
+    if maxVal > 0.3:
         Image = rotateImage(Image, RotationAngle2)
-        ColorCardCaptured = Image[maxLoc[1]-P24ColorCardCaptured.shape[0]//2:maxLoc[1]+P24ColorCardCaptured.shape[0]//2, \
-                                  maxLoc[0]-P24ColorCardCaptured.shape[1]//2:maxLoc[0]+P24ColorCardCaptured.shape[1]//2]
+        ColorCardCaptured = Image[matchedLoc[1]-P24ColorCardCaptured.shape[0]//2:matchedLoc[1]+P24ColorCardCaptured.shape[0]//2, \
+                                  matchedLoc[0]-P24ColorCardCaptured.shape[1]//2:matchedLoc[0]+P24ColorCardCaptured.shape[1]//2]
         
         Captured_Colors = np.zeros([3,24])
         STD_Colors = np.zeros([24])
@@ -244,7 +277,7 @@ def correctDistortionAndColor(Arg):
         ArgRefined, _ = optimize.leastsq(getColorMatchingErrorVectorised, Arg2, args=(Colors, Captured_Colors), maxfev=10000)
         
         ErrrorList = getColorMatchingErrorVectorised(ArgRefined, Colors, Captured_Colors)
-        Error = np.sum(np.asarray(ErrrorList))
+        CorrectionError = np.sum(np.asarray(ErrrorList))
         
         ColorMatrix = ArgRefined[:9].reshape([3,3])
         ColorConstant = ArgRefined[9:12].reshape([3,1])
@@ -256,8 +289,8 @@ def correctDistortionAndColor(Arg):
     else:
         print('Skip color correction of', ImageFile_)
         ImageCorrected = Image
-        maxLoc = [-1.0, -1.0]
-        Error = -1.0
+        matchedLoc = [-1.0, -1.0]
+        CorrectionError = -1.0
         
     OutputPath = os.path.dirname(OutputFile)
     if not os.path.exists(OutputPath):
@@ -265,7 +298,7 @@ def correctDistortionAndColor(Arg):
         os.makedirs(OutputPath)
     cv2.imwrite(OutputFile, np.uint8(ImageCorrected[:,:,2::-1])) # convert to B-G-R image and save
     print('Saved', OutputFile)
-    return Error, maxLoc
+    return maxVal, matchedLoc, CorrectionError
 
 
 def main(argv):
@@ -273,8 +306,7 @@ def main(argv):
                     '-f <root image folder> '+ \
                     '-o <output file>\n' + \
                  'Example:\n' + \
-                 "$ ./correctDistortionAndColor.py -i /home/chuong/Data/GC03L-temp/corrected/IMG_6425.JPG -c /home/chuong/Data/GC03L-temp/corrected/CameraTrax_24ColorCard_2x3in.png -r \n" +\
-                 "$ ./correctDistortionAndColor.py -f /home/chuong/Data/GC03L-temp/corrected/ -p IMG*JPG -c /home/chuong/Data/GC03L-temp/corrected/CameraTrax_24ColorCard_2x3in.png -o /home/chuong/Data/GC03L-temp/rectified/"
+                 "$ ./correctDistortionAndColor.py -f /mnt/phenocam/a_data/TimeStreams/BorevitzTest/BVZ0018/BVZ0018-GC04L~fullres-orig/ -k /mnt/phenocam/a_data/TimeStreams/BorevitzTest/BVZ0018/BVZ0018-GC04L~fullres-corr/calib_param_700Dcam.yml -g /mnt/phenocam/a_data/TimeStreams/BorevitzTest/BVZ0018/BVZ0018-GC04L~fullres-corr/CameraTrax_24ColorCard_2x3in.png -c /mnt/phenocam/a_data/TimeStreams/BorevitzTest/BVZ0018/BVZ0018-GC04L~fullres-corr/CameraTrax_24ColorCard_2x3inCaptured.png -o /mnt/phenocam/a_data/TimeStreams/BorevitzTest/BVZ0018/BVZ0018-GC04L~fullres-corr/ -j 16"
     try:
         opts, args = getopt.getopt(argv,"hi:f:k:c:g:o:j:",\
             ["ifile=","ifolder=","calibfile=","captured-colorcard=","groundtruth-colorcard=","ofolder=","jobs="])
@@ -357,7 +389,7 @@ def main(argv):
             OutputPath = os.path.join(OutputFolder, ImagePath[len(InputRootFolder):])
             OutputFile = os.path.join(OutputPath, ImageName)
         ArgList.append([ImageFile_, UndistMapX, UndistMapY, P24ColorCardCaptured, Colors, OutputFile])
-#        if i == 10:
+#        if i == 50:
 #            break
     Process = Pool(processes = NoJobs)
     import time
@@ -367,9 +399,9 @@ def main(argv):
     InfoFile = os.path.join(OutputFolder, 'ColorCorrectionInfo.txt')
     with open(InfoFile, 'w') as myfile:
         myfile.write('It took %0.3f seconds to process %d files using %d processes\n' % (time2-time1, len(Results), NoJobs))
-        myfile.write('ImageFileName; CorrectionError(-1.0 for undetected colorbar); ColorPosition-X; ColorbarPosition-Y\n')
+        myfile.write('ImageFileName; MatchingScore; ColorPosition-X(-1.0 for undetected colorbar); ColorbarPosition-Y(-1.0 for undetected colorbar); CorrectionError(-1.0 for undetected colorbar)\n')
         for Result,Arg in zip(Results, ArgList):
-            myfile.write('%s; %f; %f; %f\n' %(Arg[0], Result[0], Result[1][0], Result[1][1]) )
+            myfile.write('%s; %f; %d; %d; %f\n' %(Arg[0], Result[0], Result[1][0], Result[1][1], Result[2]) )
     print('Finished. Saved color correction info to', InfoFile)
 if __name__ == "__main__":
    main(sys.argv[1:])

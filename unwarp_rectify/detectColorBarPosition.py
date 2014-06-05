@@ -51,8 +51,33 @@ def rotateImage(Image, RotationAngle = 0.0):
         Image_ = cv2.warpAffine(Image_, rot_mat, Image_.shape[0:2],flags=cv2.INTER_LINEAR)
     return Image_
 
+def matchTemplate(Image, Template, SearchTopLeftCorner, SearchBottomRightCorner):
+    CropedImage = Image[SearchTopLeftCorner[1]:SearchBottomRightCorner[1], SearchTopLeftCorner[0]:SearchBottomRightCorner[0]]
+    corrMap = cv2.matchTemplate(CropedImage.astype(np.uint8), Template.astype(np.uint8), cv2.TM_CCOEFF_NORMED)
+    _, maxVal, _, maxLoc = cv2.minMaxLoc(corrMap)
+    # recalculate max position in cropped image space
+    matchedLocImageCropped = (maxLoc[0] + Template.shape[1]//2, 
+                              maxLoc[1] + Template.shape[0]//2)
+    # recalculate max position in full image space
+    matchedLocImage = (matchedLocImageCropped[0] + SearchTopLeftCorner[0], \
+                       matchedLocImageCropped[1] + SearchTopLeftCorner[1])
+#    plt.figure()
+#    plt.imshow(corrMap)
+#    plt.hold(True)
+#    plt.plot([maxLoc[0]], [maxLoc[1]], 'o')
+#    plt.figure()
+#    plt.imshow(CropedImage)
+#    plt.hold(True)
+#    plt.plot([matchedLocImageCropped[0]], [matchedLocImageCropped[1]], 'o')
+#    plt.figure()
+#    plt.imshow(Image)
+#    plt.hold(True)
+#    plt.plot([matchedLocImage[0]], [matchedLocImage[1]], 'o')
+#    plt.show()
 
-def findColorbarPyramid(Image, Colorbar, RotationAngle = None, NearCenter = True, NoLevels = 3, FinalLevel = 0):
+    return matchedLocImage, maxVal, maxLoc, corrMap
+    
+def findColorbarPyramid(Image, Colorbar, RotationAngle = None, SearchRange = 0.5, NoLevels = 5, FinalLevel = 1):
     for i in range(NoLevels):
         if i == 0:
             PyramidImages = [Image]
@@ -63,71 +88,68 @@ def findColorbarPyramid(Image, Colorbar, RotationAngle = None, NearCenter = True
 
     for i in range(NoLevels-1, -1, -1):
         if i == NoLevels-1:
-            corrMap = cv2.matchTemplate(PyramidImages[i], PyramidColorbars[i], cv2.TM_CCOEFF_NORMED)
-            _, maxVal, _, maxLoc = cv2.minMaxLoc(corrMap)
+            maxLocEst = [PyramidImages[i].shape[1]//2, PyramidImages[i].shape[0]//2] # image center
+            if SearchRange > 0 and SearchRange <= 1.0:
+                CroppedHalfWidth  = SearchRange*PyramidImages[i].shape[1]//2 
+                CroppedHalfHeight = SearchRange*PyramidImages[i].shape[0]//2
+            else:
+                CroppedHalfWidth  = PyramidImages[i].shape[1]//2 
+                CroppedHalfHeight = PyramidImages[i].shape[0]//2
+            SearchTopLeftCorner     = [maxLocEst[0]-CroppedHalfWidth, maxLocEst[1]-CroppedHalfHeight]
+            SearchBottomRightCorner = [maxLocEst[0]+CroppedHalfWidth, maxLocEst[1]+CroppedHalfHeight]
+
+            matchedLocImage, maxVal, maxLoc, corrMap = matchTemplate(PyramidImages[i], PyramidColorbars[i], SearchTopLeftCorner, SearchBottomRightCorner)
+
             if RotationAngle == None:
-                corrMap180 = cv2.matchTemplate(np.rot90(PyramidImages[i],2), PyramidColorbars[i], cv2.TM_CCOEFF_NORMED)
-                _, maxVal180, _, maxLoc180 = cv2.minMaxLoc(corrMap180)
-                Radius = np.sqrt((maxLoc[0]-PyramidImages[i].shape[1]/2)**2 + (maxLoc[1]-PyramidImages[i].shape[0]/2)**2)
-                Radius180 = np.sqrt((maxLoc180[0]-PyramidImages[i].shape[1]/2)**2 + (maxLoc180[1]-PyramidImages[i].shape[0]/2)**2)
-                if Radius/Radius180 > 0.9:
-                    print('Cannot find a colorbar')
-                    return None, None, None
-                if (NearCenter and  maxVal/Radius < maxVal180/Radius180) or \
-                   ((not NearCenter) and maxVal < maxVal180):
+                matchedLocImage180, maxVal180, maxLoc180, corrMap180 = matchTemplate(np.rot90(PyramidImages[i],2).astype(np.uint8), PyramidColorbars[i], SearchTopLeftCorner, SearchBottomRightCorner)
+                print('maxVal, maxVal180', maxVal, maxVal180)
+                if maxVal < 0.3 and maxVal180 < 0.3:
+                    # similar distance: very likely cannot find colorbar
+                    print('#### Cannot find a colorbar ####')
+#                    return None, None, None
+                if maxVal < maxVal180:
                     PyramidImages = [np.rot90(Img,2) for Img in PyramidImages]
+                    matchedLocImage, matchedLocImage180 = matchedLocImage180, matchedLocImage
                     maxVal, maxVal180 = maxVal180, maxVal
                     maxLoc, maxLoc180 = maxLoc180, maxLoc
                     corrMap, corrMap180 = corrMap180, corrMap
                     RotationAngle = 180
                 else:
                     RotationAngle = 0
-            # recalculate max position in image space
-            maxLocImage = (maxLoc[0] + PyramidColorbars[i].shape[1]//2, 
-                           maxLoc[1] + PyramidColorbars[i].shape[0]//2)
             # rescale to location in level-0 image
-            maxLocImage = (maxLocImage[0]*2**i, maxLocImage[1]*2**i)
+            matchedLocImage0 = (matchedLocImage[0]*2**i, matchedLocImage[1]*2**i)
         else:
-            maxLocEst = (maxLocImage[0]//2**i, maxLocImage[1]//2**i)
+            maxLocEst = (matchedLocImage0[0]//2**i, matchedLocImage0[1]//2**i)
             searchRange = (6,6)
                 
-            CroppedHalfWidth  = PyramidColorbars[i].shape[1]//2 + searchRange[0]
-            CroppedHalfHeight = PyramidColorbars[i].shape[0]//2 + searchRange[1]
-            CropedImage = PyramidImages[i][maxLocEst[1]-CroppedHalfHeight:maxLocEst[1]+CroppedHalfHeight,\
-                                           maxLocEst[0]-CroppedHalfWidth: maxLocEst[0]+CroppedHalfWidth ,:]
-#            plt.figure()
-#            plt.imshow(CropedImage)
-
-            corrMap = cv2.matchTemplate(CropedImage, PyramidColorbars[i], cv2.TM_CCOEFF_NORMED)
-            _, maxVal, _, maxLoc = cv2.minMaxLoc(corrMap)
+            CroppedHalfWidth  = PyramidColorbars[i].shape[1]//2 + searchRange[1]//2
+            CroppedHalfHeight = PyramidColorbars[i].shape[0]//2 + searchRange[0]//2
+            SearchTopLeftCorner = [maxLocEst[0]-CroppedHalfWidth, maxLocEst[1]-CroppedHalfHeight]
+            SearchBottomRightCorner = [maxLocEst[0]+CroppedHalfWidth, maxLocEst[1]+CroppedHalfHeight]
             
-            # recalculate max position in cropped image space
-            maxLocImageCropped = (maxLoc[0] + PyramidColorbars[i].shape[1]//2, 
-                                  maxLoc[1] + PyramidColorbars[i].shape[0]//2)
-            # recalculate max position in full image space
-            maxLocImage = (maxLocEst[0]-CroppedHalfWidth  + maxLocImageCropped[0], \
-                           maxLocEst[1]-CroppedHalfHeight + maxLocImageCropped[1])
+            matchedLocImage, maxVal, maxLoc, corrMap = matchTemplate(PyramidImages[i], PyramidColorbars[i], SearchTopLeftCorner, SearchBottomRightCorner)
             # rescale to location in level-0 image
-            maxLocImage = (maxLocImage[0]*2**i, maxLocImage[1]*2**i)
-        print('maxVal, maxLocImage, RotationAngle =', maxVal, maxLocImage, RotationAngle)
+            matchedLocImage0 = (matchedLocImage[0]*2**i, matchedLocImage[1]*2**i)
+
+        plt.figure()
+        plt.imshow(corrMap)
+        plt.hold(True)
+        plt.plot([maxLoc[0]], [maxLoc[1]], 'o')
+        plt.title('maxVal = %f' %maxVal)
+        
+        plt.figure()
+        plt.imshow(PyramidImages[i])
+        plt.hold(True)
+        plt.plot([matchedLocImage[0]], [matchedLocImage[1]], 'o')
+        plt.title('Level = %d, RotationAngle = %f' %(i, RotationAngle))
+        plt.show()
+
         if i ==  FinalLevel:
             # Skip early to save time
             break
         
-#        plt.figure()
-#        plt.imshow(corrMap)
-#        plt.hold(True)
-#        plt.plot([maxLoc[0]], [maxLoc[1]], 'o')
-#        plt.title('maxVal = %f' %maxVal)
-#        
-#        plt.figure()
-#        plt.imshow(PyramidImages[i])
-#        plt.hold(True)
-#        plt.plot([maxLocImage[0]//2**i], [maxLocImage[1]//2**i], 'o')
-#        plt.title('Level = %d, RotationAngle = %f' %(i, RotationAngle))
-#        plt.show()
-        
-    return maxVal, maxLocImage, RotationAngle
+    print('maxVal, maxLocImage, RotationAngle =', maxVal, matchedLocImage0, RotationAngle)
+    return maxVal, matchedLocImage0, RotationAngle
     
 
 RectData = cv2yml.yml2dic('/home/chuong/Data/ColorbarPositions/ColorbarRectangle.yml')
@@ -146,16 +168,16 @@ P24ColorCardCaptured = cv2.imread('/home/chuong/Data/ColorbarPositions/CameraTra
 SquareSizeCaptured = int(P24ColorCardCaptured.shape[0]/4)
 HalfSquareSizeCaptured = int(SquareSizeCaptured/2)
 
-#img_iter = ts_iter_images('/home/chuong/Data/ColorbarPositions')
-img_iter = ts_iter_images('/home/chuong/Data/BVZ0012-GC02L-CN650D-Cam01') 
+img_iter = ts_iter_images('/home/chuong/Data/ColorbarPositions')
+#img_iter = ts_iter_images('/home/chuong/Data/BVZ0012-GC02L-CN650D-Cam01') 
 for ImageFile in img_iter:
-    Image = cv2.imread(ImageFile)
+    Image = cv2.imread(ImageFile)[:,:,::-1]
     print(ImageFile)
     if Image.shape[0] > Image.shape[1]:
         RotationAngle = 90
         Image = rotateImage(Image, RotationAngle)
 #    maxVal, maxLoc = findColorbarPyramid(Image, P24ColorCardCaptured)
-    maxVal, maxLoc, RotationAngle2 = findColorbarPyramid(Image, P24ColorCardCaptured, NoLevels = 4, FinalLevel = 1)
+    maxVal, maxLoc, RotationAngle2 = findColorbarPyramid(Image, P24ColorCardCaptured, NoLevels = 5, FinalLevel = 3)
     if maxVal == None:
         continue
     RotationAngle = RotationAngle + RotationAngle2
