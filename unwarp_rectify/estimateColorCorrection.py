@@ -330,13 +330,16 @@ def main(argv):
         elif opt in ("-r", "--rotation"):
             RotationAngle = float(arg)
         elif opt in ("-c", "--colorcard"):
-            ColorCardFile = argImage
+            ColorCardFile = arg
         elif opt in ("-g", "--gamafile"):
             GamaFile = arg
         elif opt in ("-a", "--aspectratio"):
             AspectRatio = float(arg)
         elif opt in ("-o", "--ofolder"):
             OutputFolder = arg
+
+    if len(OutputFolder) > 0 and not os.path.exists(OutputFolder):
+        os.makedirs(OutputFolder) 
 
     P24ColorCard = cv2.imread(ColorCardFile)[:,:,::-1]
     SquareSize = int(P24ColorCard.shape[0]/4)
@@ -360,80 +363,81 @@ def main(argv):
         Image = rotateImage(Image, RotationAngle)
         if i == 0:
             RectList = selectColorCard(Image, AspectRatio)
-        for Rect in RectList:
-            print('Rect = \n', Rect)
-            Centre, Width, Height, Angle = getRectangleParamters(Rect)
-            MapX, MapY = createMap(Centre, Width, Height, Angle)
-            RectifiedColorCard = cv2.remap(Image, MapX, MapY, cv2.INTER_CUBIC)
-            
-            Captured_Colors = np.zeros([3,24])
-            SquareSize2 = int(RectifiedColorCard.shape[0]/4)
-            HalfSquareSize2 = int(SquareSize2/2)
-            for i in range(24):
-                Row = int(i/6)
-                Col = i - Row*6
-                rr = Row*SquareSize2 + HalfSquareSize2
-                cc = Col*SquareSize2 + HalfSquareSize2
-                Captured_R = RectifiedColorCard[rr-10:rr+10, cc-10:cc+10, 0].astype(np.float)
-                Captured_G = RectifiedColorCard[rr-10:rr+10, cc-10:cc+10, 1].astype(np.float)
-                Captured_B = RectifiedColorCard[rr-10:rr+10, cc-10:cc+10, 2].astype(np.float)
-                Captured_R = np.sum(Captured_R)/Captured_R.size
-                Captured_G = np.sum(Captured_G)/Captured_G.size
-                Captured_B = np.sum(Captured_B)/Captured_B.size
-                Captured_Colors[0,i] = Captured_R
-                Captured_Colors[1,i] = Captured_G
-                Captured_Colors[2,i] = Captured_B
-    #            if Captured_R < 254 and Captured_G < 254 and Captured_B < 254:
-    #                # only accepts unsaturated colors
-    #                Captured_Colors.append(np.asarray([Captured_R, Captured_G, Captured_B], dtype = np.float))
+        print('Rect = \n', RectList[0])
+        
+        dic = {'Colorbar':np.asarray(RectList[0]), 'RotationAngle':RotationAngle}
+        cv2yml.dic2yml(os.path.join(OutputFolder, 'ColorbarRectangle.yml'), dic)
+        
+        Centre, Width, Height, Angle = getRectangleParamters(RectList[0])
+        MapX, MapY = createMap(Centre, Width, Height, Angle)
+        RectifiedColorCard = cv2.remap(Image, MapX, MapY, cv2.INTER_CUBIC)
+        
+        Captured_Colors = np.zeros([3,24])
+        SquareSize2 = int(RectifiedColorCard.shape[0]/4)
+        HalfSquareSize2 = int(SquareSize2/2)
+        for i in range(24):
+            Row = int(i/6)
+            Col = i - Row*6
+            rr = Row*SquareSize2 + HalfSquareSize2
+            cc = Col*SquareSize2 + HalfSquareSize2
+            Captured_R = RectifiedColorCard[rr-10:rr+10, cc-10:cc+10, 0].astype(np.float)
+            Captured_G = RectifiedColorCard[rr-10:rr+10, cc-10:cc+10, 1].astype(np.float)
+            Captured_B = RectifiedColorCard[rr-10:rr+10, cc-10:cc+10, 2].astype(np.float)
+            Captured_R = np.sum(Captured_R)/Captured_R.size
+            Captured_G = np.sum(Captured_G)/Captured_G.size
+            Captured_B = np.sum(Captured_B)/Captured_B.size
+            Captured_Colors[0,i] = Captured_R
+            Captured_Colors[1,i] = Captured_G
+            Captured_Colors[2,i] = Captured_B
+#            if Captured_R < 254 and Captured_G < 254 and Captured_B < 254:
+#                # only accepts unsaturated colors
+#                Captured_Colors.append(np.asarray([Captured_R, Captured_G, Captured_B], dtype = np.float))
 #            print('Captured_Colors = \n', Captured_Colors)
-    
-            # initial values
-            ColorMatrix = np.eye(3)
-            ColorConstant = np.zeros([3,1])
-            ColorGamma = np.ones([3,1])
+
+        # initial values
+        ColorMatrix = np.eye(3)
+        ColorConstant = np.zeros([3,1])
+        ColorGamma = np.ones([3,1])
 #            print('ColorMatrix = \n', ColorMatrix)
 #            print('ColorConstant = \n', ColorConstant)
 #            print('ColorGamma = \n', ColorGamma)
-            Arg = np.zeros([9 + 3 + 3])
-            Arg[:9] = ColorMatrix.reshape([9])
-            Arg[9:12] = ColorConstant.reshape([3])
-            Arg[12:15] = ColorGamma.reshape([3])
-            
-            ArgRefined, _ = optimize.leastsq(getColorMatchingErrorVectorised, Arg, args=(Colors, Captured_Colors), maxfev=10000)
-            
-            ColorMatrix = ArgRefined[:9].reshape([3,3])
-            ColorConstant = ArgRefined[9:12].reshape([3,1])
-            ColorGamma = ArgRefined[12:15]
-            print('ColorMatrix = \n', ColorMatrix)
-            print('ColorConstant = \n', ColorConstant)
-            print('ColorGamma = \n', ColorGamma)
-            
-            ImageCorrected = correctColorVectorised(Image.astype(np.float), ColorMatrix, ColorConstant, ColorGamma)
+        Arg = np.zeros([9 + 3 + 3])
+        Arg[:9] = ColorMatrix.reshape([9])
+        Arg[9:12] = ColorConstant.reshape([3])
+        Arg[12:15] = ColorGamma.reshape([3])
         
-            if len(OutputFolder) > 0:
-                if not os.path.exists(OutputFolder):
-                    os.makedirs(OutputFolder) 
-                OutputFile = os.path.join(OutputFolder, os.path.basename(ImageFile_))
-                ImageCorrected[np.where(ImageCorrected < 0)] = 0
-                ImageCorrected[np.where(ImageCorrected > 255)] = 255
-                cv2.imwrite(OutputFile, np.uint8(ImageCorrected[:,:,2::-1]))
-                print('Saved ', OutputFile)
-            else:
-                ColorCardCorrected = correctColorVectorised(RectifiedColorCard, ColorMatrix, ColorConstant, ColorGamma)
-                plt.figure()
-                plt.imshow(RectifiedColorCard/255)
-                plt.title('Captured CameraTrax 24-color card')
-                plt.figure()
-                plt.imshow(ColorCardCorrected/255)
-                plt.title('Corrected CameraTrax 24-color card')
-                
-                plt.figure()
-                plt.imshow(Image)
-                plt.title('Captured Chamber Image')
-                plt.figure()
-                plt.imshow(ImageCorrected/255)
-                plt.title('Corrected Chamber Image')
+        ArgRefined, _ = optimize.leastsq(getColorMatchingErrorVectorised, Arg, args=(Colors, Captured_Colors), maxfev=10000)
+        
+        ColorMatrix = ArgRefined[:9].reshape([3,3])
+        ColorConstant = ArgRefined[9:12].reshape([3,1])
+        ColorGamma = ArgRefined[12:15]
+        print('ColorMatrix = \n', ColorMatrix)
+        print('ColorConstant = \n', ColorConstant)
+        print('ColorGamma = \n', ColorGamma)
+        
+        ImageCorrected = correctColorVectorised(Image.astype(np.float), ColorMatrix, ColorConstant, ColorGamma)
+    
+        if len(OutputFolder) > 0:
+            OutputFile = os.path.join(OutputFolder, os.path.basename(ImageFile_))
+            ImageCorrected[np.where(ImageCorrected < 0)] = 0
+            ImageCorrected[np.where(ImageCorrected > 255)] = 255
+            cv2.imwrite(OutputFile, np.uint8(ImageCorrected[:,:,2::-1]))
+            print('Saved ', OutputFile)
+        else:
+            ColorCardCorrected = correctColorVectorised(RectifiedColorCard, ColorMatrix, ColorConstant, ColorGamma)
+            plt.figure()
+            plt.imshow(RectifiedColorCard/255)
+            plt.title('Captured CameraTrax 24-color card')
+            plt.figure()
+            plt.imshow(ColorCardCorrected/255)
+            plt.title('Corrected CameraTrax 24-color card')
+            
+            plt.figure()
+            plt.imshow(Image)
+            plt.title('Captured Chamber Image')
+            plt.figure()
+            plt.imshow(ImageCorrected/255)
+            plt.title('Corrected Chamber Image')
             
                 
     plt.figure()
