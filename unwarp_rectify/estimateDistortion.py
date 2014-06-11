@@ -44,7 +44,7 @@ def detectTargetImagePoints(FileName, PatternType, GridSize):
         # start from the top of 
         ret, ImgPoints = cv2.findChessboardCorners(PyramidGrays[PyramidLevels-1], GridSize, None)
         if ret == False:
-            return np.array([])
+            return np.array([]), Img.shape[2::-1]
         else:
             for i in range(PyramidLevels-1, -1, -1):
                 if i != PyramidLevels-1:
@@ -92,8 +92,8 @@ def saveCalibrationData(CalibFileName, SquareSize, ImageSize, CameraMatrix, Dist
         myfile.write('   rows: 5\n')
         myfile.write('   cols: 1\n')
         myfile.write('   dt: d\n')
-        myfile.write('   data: [ %f, %f, 0.0, 0.0, 0.0]\n' \
-                %(DistCoefs[0][0], DistCoefs[0][1]))
+        myfile.write('   data: [ %f, %f, %f, %f, %f]\n' \
+                %(DistCoefs[0][0], DistCoefs[0][1], DistCoefs[0][2], DistCoefs[0][3], DistCoefs[0][4]))
         myfile.write('# rotation vectors of the camera\n')
         myfile.write('RVecs: !!opencv-matrix\n')
         myfile.write('   rows: %d\n' %len(RVecs))
@@ -140,10 +140,11 @@ def main(argv):
     GridHeight = 12
     SquareSize = 40.0 #mm
     PatternType = 'chessboard'
+#    Flags = cv2.CALIB_FIX_ASPECT_RATIO + cv2.CALIB_ZERO_TANGENT_DIST
     Flags = cv2.CALIB_FIX_PRINCIPAL_POINT + \
-            cv2.CALIB_FIX_ASPECT_RATIO + \
-            cv2.CALIB_ZERO_TANGENT_DIST + \
-            cv2.CALIB_FIX_K3
+            cv2.CALIB_FIX_ASPECT_RATIO #+ \
+#            cv2.CALIB_ZERO_TANGENT_DIST #+ \
+#            cv2.CALIB_FIX_K3
     for opt, arg in opts:
         if opt == '-h':
             print(HelpString)
@@ -169,6 +170,9 @@ def main(argv):
     ObjPointsList = []
     for FileName in NameList:
         ImgPoints, ImageSize = detectTargetImagePoints(os.path.join(Path, FileName), PatternType, GridSize)
+        if len(ImgPoints) == 0:
+            print('Cannot detect pattern from', FileName)
+            continue
         ImgPointsList.append(ImgPoints)
         ObjPointsList.append(ObjPoints)
         
