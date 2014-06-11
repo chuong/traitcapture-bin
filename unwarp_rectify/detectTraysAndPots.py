@@ -147,12 +147,13 @@ def matchTemplatePyramid(PyramidImages, PyramidTemplates, RotationAngle = None, 
             # Skip early to save time
             break
         
-    print('maxVal, maxLocImage, RotationAngle =', maxVal, matchedLocImage0, RotationAngle)
+#    print('maxVal, maxLocImage, RotationAngle =', maxVal, matchedLocImage0, RotationAngle)
     return maxVal, matchedLocImage0, RotationAngle
 
 def detectTraysAndPots(Arg):
     ImageFile_, Tray_PyramidImagesList, TrayEstimatedPositions, \
             Pot_PyramidImages, PotEstimatedPositions, OutputFile = Arg
+    print('Process ', ImageFile_)
     Image = cv2.imread(ImageFile_)[:,:,::-1] # read and convert to R-G-B image
     PyramidImages = createImagePyramid(Image)
     
@@ -202,23 +203,23 @@ def detectTraysAndPots(Arg):
         PotLocs2.append(PotLocs)
         PotLocs2_.append(PotLocs_)
 
-    plt.figure()
-    plt.imshow(Pot_PyramidImages[0])
-    plt.figure()
-    plt.imshow(PyramidImages[0])
-    plt.hold(True)
-    PotIndex = 0
-    for i,Loc in enumerate(TrayLocs):
-        plt.plot([Loc[0]], [Loc[1]], 'bo')
-        plt.text(Loc[0], Loc[1]-15, 'T'+str(i+1), color='blue', fontsize=20)
-        for PotLoc,PotLoc_ in zip(PotLocs2[i], PotLocs2_[i]):
-            plt.plot([PotLoc[0]], [PotLoc[1]], 'ro')
-            plt.text(PotLoc[0], PotLoc[1]-15, str(PotIndex+1), color='red')  
-            plt.plot([PotLoc_[0]], [PotLoc_[1]], 'rx')
-            PotIndex = PotIndex + 1
-            
-    plt.title(os.path.basename(ImageFile_))
-    plt.show()
+#    plt.figure()
+#    plt.imshow(Pot_PyramidImages[0])
+#    plt.figure()
+#    plt.imshow(PyramidImages[0])
+#    plt.hold(True)
+#    PotIndex = 0
+#    for i,Loc in enumerate(TrayLocs):
+#        plt.plot([Loc[0]], [Loc[1]], 'bo')
+#        plt.text(Loc[0], Loc[1]-15, 'T'+str(i+1), color='blue', fontsize=20)
+#        for PotLoc,PotLoc_ in zip(PotLocs2[i], PotLocs2_[i]):
+#            plt.plot([PotLoc[0]], [PotLoc[1]], 'ro')
+#            plt.text(PotLoc[0], PotLoc[1]-15, str(PotIndex+1), color='red')  
+#            plt.plot([PotLoc_[0]], [PotLoc_[1]], 'rx')
+#            PotIndex = PotIndex + 1
+#            
+#    plt.title(os.path.basename(ImageFile_))
+#    plt.show()
         
 #    OutputPath = os.path.dirname(OutputFile)
 #    if not os.path.exists(OutputPath):
@@ -329,23 +330,32 @@ def main(argv):
             OutputFile = os.path.join(OutputPath, ImageName)
         ArgList.append([ImageFile_, Tray_PyramidImagesList, TrayEstimatedPositions, \
             Pot_PyramidImages, PotEstimatedPositions, OutputFile])
-#        if i == 50:
+#        if i == 10:
 #            break
+        
     Process = Pool(processes = NoJobs)
     import time
     time1 = time.time()
     
-#    Results = Process.map(detectTraysAndPots, ArgList)
-    for Arg in ArgList:
-        detectTraysAndPots(Arg)
+    Results = Process.map(detectTraysAndPots, ArgList)
+#    Results = []
+#    for Arg in ArgList:
+#        TrayLocs, PotLocs = detectTraysAndPots(Arg)
+#        Results.append([TrayLocs, PotLocs])
     
     time2 = time.time()
-    InfoFile = os.path.join(OutputFolder, 'ColorCorrectionInfo.txt')
+    InfoFile = os.path.join(OutputFolder, 'TrayPotDetectionInfo.txt')
     with open(InfoFile, 'w') as myfile:
         myfile.write('It took %0.3f seconds to process %d files using %d processes\n' % (time2-time1, len(Results), NoJobs))
-        myfile.write('ImageFileName; MatchingScore; ColorPosition-X(-1.0 for undetected colorbar); ColorbarPosition-Y(-1.0 for undetected colorbar); CorrectionError(-1.0 for undetected colorbar)\n')
+        myfile.write('ImageFileName; 5 Tray x-y positions; 20 Pot x-y positions)\n')
         for Result,Arg in zip(Results, ArgList):
-            myfile.write('%s; %f; %d; %d; %f\n' %(Arg[0], Result[0], Result[1][0], Result[1][1], Result[2]) )
+            myfile.write('%s; ' %Arg[0])
+            for TrayPosition in Result[0]:
+                myfile.write('%d; %d ' %(TrayPosition[0], TrayPosition[1]))
+            for PotPosition in Result[1]:
+                myfile.write('%d; %d ' %(PotPosition[0], PotPosition[1]))
+            myfile.write('\n')
+
     print('Finished. Saved color correction info to', InfoFile)
 if __name__ == "__main__":
    main(sys.argv[1:])
