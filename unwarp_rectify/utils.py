@@ -8,9 +8,10 @@ from __future__ import absolute_import, division, print_function
 
 import numpy as np
 import cv2yml
+import cv2
 
-def getRectCornersFrom2Points(Image, Points, AspectRatio):
-    print('Points =', Points)
+def getRectCornersFrom2Points(Image, Points, AspectRatio, Rounded = False):
+#    print('Points =', Points)
     Length = np.sqrt((Points[0][0] - Points[1][0])**2 + \
                      (Points[0][1] - Points[1][1])**2)
     Height = Length/np.sqrt(1+AspectRatio**2)
@@ -22,7 +23,10 @@ def getRectCornersFrom2Points(Image, Points, AspectRatio):
     CornerTypes = ['topleft', 'bottomleft', 'bottomright', 'topright']
     Rect = []
     for Corner, Type in zip(InitRect, CornerTypes):
-        Corner = findCorner(Image, Corner, Type)
+        if not Rounded:
+            Corner = findCorner(Image, Corner, Type)
+        else:
+            Corner = findRoundedCorner(Image, Corner, Type)
         Rect.append(Corner)
     return Rect
 
@@ -38,6 +42,22 @@ def createRectangle(Centre, Width, Height, Angle):
         yrot = -RectFit[i][0]*np.sin(Angle) + RectFit[i][1]*np.cos(Angle)
         RectFit[i][0], RectFit[i][1] = (xrot+Centre[0]), (yrot+Centre[1])
     return RectFit
+
+def getRectangleParamters(Rect):
+    tl = np.asarray(Rect[0])
+    bl = np.asarray(Rect[1])
+    br = np.asarray(Rect[2])
+    tr = np.asarray(Rect[3])
+    
+    # paramters of fitted Rectangle
+    Centre = (tl + bl + br + tr)/4.0
+    Width  = (np.linalg.norm(tr - tl) + np.linalg.norm(br - bl))/2.0
+    Height = (np.linalg.norm(bl - tl) + np.linalg.norm(br - tr))/2.0
+    Angle = (np.arctan2(-(tr[1] - tl[1]), tr[0] - tl[0]) + \
+             np.arctan2(-(br[1] - bl[1]), br[0] - bl[0]) + \
+             np.arctan2(  bl[0] - tl[0] , bl[1] - tl[1]) + \
+             np.arctan2(  br[0] - tr[0] , br[1] - tr[1]))/4
+    return Centre, Width, Height, Angle
 
 def findCorner(Image, Corner, CornerType = 'topleft', WindowSize = 100, Threshold = 50):
     x, y = Corner
@@ -78,6 +98,10 @@ def findCorner(Image, Corner, CornerType = 'topleft', WindowSize = 100, Threshol
         print('Cannot detect corner ' + CornerType)
         return [x, y]
 
+def findRoundedCorner(Image, Corner, CornerType = 'topleft', WindowSize = 100, Threshold = 50):
+    #TODO: add search for rounded corner with better accuracy
+    return Corner
+
 def correctPointOrder(Rect, tolerance = 40):
     # find minimum values of x and y
     minX = 10e6
@@ -106,6 +130,28 @@ def correctPointOrder(Rect, tolerance = 40):
     else:
         Rect = [topLeft, bottomLeft, bottomRight, topRight]
         return Rect
+
+def getMedianRectSize(RectList):
+    WidthList = []
+    HeightList = []
+    for Rect in RectList:
+        Centre, Width, Height, Angle = getRectangleParamters(Rect)
+        WidthList.append(Width)
+        HeightList.append(Height)
+    MedianWidth = int(sorted(WidthList)[int(len(RectList)/2)])
+    MedianHeight = int(sorted(HeightList)[int(len(RectList)/2)])
+    return MedianWidth, MedianHeight
+
+def rectifyRectImages(Image, RectList, MedianSize):
+    Width, Height = MedianSize
+    RectifiedCorners = np.float32([[0,0], [0,Height], [Width,Height], [Width,0]])
+    RectifiedTrayImages = []
+    for Rect in RectList:
+        Corners = np.float32(Rect)
+        M = cv2.getPerspectiveTransform(Corners, RectifiedCorners)
+        RectifiedTrayImage = cv2.warpPerspective(Image, M,(Width, Height))
+        RectifiedTrayImages.append(RectifiedTrayImage)
+    return RectifiedTrayImages
 
 def readCalibration(CalibFile):
     parameters = cv2yml.yml2dic(CalibFile)
