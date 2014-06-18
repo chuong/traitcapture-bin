@@ -118,6 +118,7 @@ class Window(QtGui.QDialog):
         
         self.ax = None
         self.plotRect = None
+        self.plotImg = None
         self.image = None
         self.UndistMapX = None
         self.UndistMapY = None
@@ -187,11 +188,18 @@ class Window(QtGui.QDialog):
                 self.ax = self.figure.add_subplot(111)
                 self.ax.figure.canvas.mpl_connect('button_press_event', self.onMouseClicked)
                 self.ax.figure.canvas.mpl_connect('motion_notify_event', self.onMouseMoves)
-#                cursor = Cursor(self.ax, useblit=True, color='red', linewidth=1)
+                self.ax.figure.canvas.mpl_connect('figure_enter_event', self.changeCursor)
             self.ax.hold(False)
-            self.ax.imshow(self.image)
+            if self.plotImg == None:
+                self.plotImg = self.ax.imshow(self.image)
+            else:
+                self.plotImg.set_data(self.image)
             self.figure.tight_layout()
             self.canvas.draw()
+        
+    def changeCursor(self, event):
+#        cursor = Cursor(self.ax, useblit=True, color='red', linewidth=1)
+        self.canvas.setCursor(QtGui.QCursor(QtCore.Qt.CrossCursor ))
         
     def updateFigure(self):
         xs, ys = [], []
@@ -210,6 +218,9 @@ class Window(QtGui.QDialog):
         for x,y in self.leftClicks:
             xs = xs + [x]
             ys = ys + [y]
+#        if self.crosshair != None:
+#            xs = xs + [np.nan, 0, self.image.shape[1], np.nan, self.crosshair[0], self.crosshair[0], np.nan]
+#            ys = ys + [np.nan, self.crosshair[1], self.crosshair[1], np.nan, 0, self.image.shape[0], np.nan]
         if len(xs) > 0 and len(ys) > 0:
             if self.plotRect == None:
                 self.ax.hold(True)
@@ -222,7 +233,6 @@ class Window(QtGui.QDialog):
                 self.plotRect.set_data(xs, ys)
         self.canvas.draw()
            
-#        self.status.setText('Plot done.') 
         app.processEvents()
 
          
@@ -240,7 +250,10 @@ class Window(QtGui.QDialog):
             self.image = cv2.remap(self.image, self.UndistMapX, self.UndistMapY, cv2.INTER_CUBIC)
             self.isDistortionCorrected = True
             self.status.append('Corrected image distortion.') 
-            self.ax.imshow(self.image)
+            if self.plotImg == None:
+                self.plotImg = self.ax.imshow(self.image)
+            else:
+                self.plotImg.set_data(self.image)
             self.canvas.draw()
         
     def saveSelectedGeometries(self):
@@ -255,7 +268,7 @@ class Window(QtGui.QDialog):
         potList2 = []
         for pot in self.potList:
             potList2 = potList2 + pot
-        dicdata = {'colorcardList':np.asarray(colorcardList2), \
+        dicdata = {'colorcardself.crosshair = NoneList':np.asarray(colorcardList2), \
                    'trayList':np.asarray(trayList2), \
                    'potList':np.asarray(potList2), \
                    'rotationAngle':self.rotationAngle, \
@@ -288,7 +301,10 @@ class Window(QtGui.QDialog):
             self.rotationAngle = self.rotationAngle - 360
         self.image = np.rot90(self.image) #.astype(uint8)
         self.status.append('Rot. angle = %d deg' %self.rotationAngle) 
-        self.ax.imshow(self.image)
+        if self.plotImg == None:
+            self.plotImg = self.ax.imshow(self.image)
+        else:
+            self.plotImg.set_data(self.image)
         self.canvas.draw()
 
     def onMouseClicked(self, event):
@@ -351,10 +367,12 @@ class Window(QtGui.QDialog):
 
     def onMouseMoves(self, event):
         if event.inaxes == self.ax:
-            self.mousePosition.setText('Mouse: %d, %d' %(event.xdata, event.ydata))
-            
+            self.mousePosition.setText('x=%d, y=%d' %(event.xdata, event.ydata))
+#            self.crosshair = [event.xdata, event.ydata]
         else:
             self.mousePosition.setText('')
+#            self.crosshair = None
+#        self.updateFigure()
         
     def keyPressEvent(self, e):
         if e.key() == QtCore.Qt.Key_Escape:
