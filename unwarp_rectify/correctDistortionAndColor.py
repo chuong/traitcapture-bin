@@ -25,6 +25,9 @@ def correctDistortionAndColor(Arg):
     ImageFile_, RotationAngle, UndistMapX, UndistMapY, P24ColorCardCaptured_PyramidImages, colorcardPosition, Colors, Tray_PyramidImagesList, trayPositions, Pot_PyramidImages, OutputFile = Arg
     Image = cv2.imread(ImageFile_)[:,:,::-1] # read and convert to R-G-B image
     print(ImageFile_)
+    if Image == None:
+        print('Cannot read file')
+        return 
 
     Image = utils.rotateImage(Image, RotationAngle)
     if UndistMapX != None:
@@ -124,8 +127,8 @@ def correctDistortionAndColor(Arg):
         StepY = Tray_PyramidImages[0].shape[0]//5
         StartX = TrayLoc[0] - Tray_PyramidImages[0].shape[1]//2 + StepX//2
         StartY = TrayLoc[1] + Tray_PyramidImages[0].shape[0]//2 - StepY//2
-#            SearchRange = [Pot_PyramidImages[0].shape[1]//6, Pot_PyramidImages[0].shape[0]//6]
-        SearchRange = [32, 32]
+        SearchRange = [Pot_PyramidImages[0].shape[1]//6, Pot_PyramidImages[0].shape[0]//6]
+#        SearchRange = [32, 32]
         print('SearchRange=', SearchRange)
         PotLocs = []
         PotLocs_ = []
@@ -157,6 +160,8 @@ def correctDistortionAndColor(Arg):
 #    plt.text(ColorCardLoc[0]-30, ColorCardLoc[1]-15, 'ColorCard', color='yellow')
 #    PotIndex = 0
 #    for i,Loc in enumerate(TrayLocs):
+#        if Loc == None:
+#            continue
 #        plt.plot([Loc[0]], [Loc[1]], 'bo')
 #        plt.text(Loc[0], Loc[1]-15, 'T'+str(i+1), color='blue', fontsize=20)
 #        for PotLoc,PotLoc_ in zip(PotLocs2[i], PotLocs2_[i]):
@@ -200,8 +205,8 @@ def main(argv):
     InputRootFolder = ''
     OutputFolder = ''
     InitialGeometryFile = 'ColorcardTrayPotSelections.yml'
-#    ColorCardTrueFile = 'CameraTrax_24ColorCard_2x3in.png'
-    ColorCardTrueFile = 'CameraTrax_24ColorCard_2x3in180deg.png'
+    ColorCardTrueFile = 'CameraTrax_24ColorCard_2x3in.png'
+#    ColorCardTrueFile = 'CameraTrax_24ColorCard_2x3in180deg.png'
 #    ColorCardCapturedFile = 'CameraTrax_24ColorCard_2x3inCaptured.png'
     ColorCardCapturedFile = 'Card_%d.png'
     TrayCapturedFile = 'Tray_%d.png'
