@@ -9,7 +9,23 @@ from __future__ import absolute_import, division, print_function
 import numpy as np
 import cv2yml
 import cv2
-from matplotlib import pylab as plt
+from scipy import optimize
+
+#RED GRN BLU
+CameraTrax_24ColorCard = \
+ [[ 115., 196.,  91.,  94., 129.,  98., 223.,  58., 194.,  93., 162., 229., \
+    49.,  77., 173., 241., 190.,   0., 242., 203., 162., 120.,  84.,  50.], \
+ [  83., 147., 122., 108., 128., 190., 124.,  92.,  82.,  60., 190., 158., \
+    66., 153.,  57., 201.,  85., 135., 243., 203., 163., 120.,  84.,  50.], \
+ [  68., 127., 155.,  66., 176., 168.,  47., 174.,  96., 103.,  62.,  41., \
+   147.,  71.,  60.,  25., 150., 166., 245., 204., 162., 120.,  84.,  52.]]
+CameraTrax_24ColorCard180deg = \
+ [[  50.,  84., 120., 162., 203., 242.,   0., 190., 241., 173.,  77.,  49., \
+   229., 162.,  93., 194.,  58., 223.,  98., 129.,  94.,  91., 196., 115.], \
+ [  50.,  84., 120., 163., 203., 243., 135.,  85., 201.,  57., 153.,  66., \
+   158., 190.,  60.,  82.,  92., 124., 190., 128., 108., 122., 147.,  83.], \
+ [  52.,  84., 120., 162., 204., 245., 166., 150.,  25.,  60.,  71., 147., \
+    41.,  62., 103.,  96., 174.,  47., 168., 176.,  66., 155., 127.,  68.]]
 
 def getRectCornersFrom2Points(Image, Points, AspectRatio, Rounded = False):
 #    print('Points =', Points)
@@ -195,6 +211,29 @@ def createMap(Centre, Width, Height, Angle):
     MapY2 = -MapX*np.sin(Angle) + MapY*np.cos(Angle) + Centre[1]
     return MapX2.astype(np.float32), MapY2.astype(np.float32)
     
+def getColorcardColors(ColorCardCaptured, GridSize):
+    GridCols, GridRows = GridSize
+    Captured_Colors = np.zeros([3,GridRows*GridCols])
+    STD_Colors = np.zeros([GridRows*GridCols])
+    SquareSize2 = int(ColorCardCaptured.shape[0]/GridRows)
+    HalfSquareSize2 = int(SquareSize2/2)
+    for i in range(GridRows*GridCols):
+        Row = i//GridCols
+        Col = i - Row*GridCols
+        rr = Row*SquareSize2 + HalfSquareSize2
+        cc = Col*SquareSize2 + HalfSquareSize2
+        Captured_R = ColorCardCaptured[rr-10:rr+10, cc-10:cc+10, 0].astype(np.float)
+        Captured_G = ColorCardCaptured[rr-10:rr+10, cc-10:cc+10, 1].astype(np.float)
+        Captured_B = ColorCardCaptured[rr-10:rr+10, cc-10:cc+10, 2].astype(np.float)
+        STD_Colors[i] = np.std(Captured_R) + np.std(Captured_G) + np.std(Captured_B)
+        Captured_R = np.sum(Captured_R)/Captured_R.size
+        Captured_G = np.sum(Captured_G)/Captured_G.size
+        Captured_B = np.sum(Captured_B)/Captured_B.size
+        Captured_Colors[0,i] = Captured_R
+        Captured_Colors[1,i] = Captured_G
+        Captured_Colors[2,i] = Captured_B
+    return Captured_Colors, STD_Colors
+
 # Using modified Gamma Correction Algorithm by
 # Constantinou2013 - A comparison of color correction algorithms for endoscopic cameras
 def getColorMatchingError(Arg, Colors, Captured_Colors):
@@ -236,6 +275,25 @@ def getColorMatchingErrorVectorised(Arg, Colors, Captured_Colors):
     ErrorList = np.sqrt(np.sum(Diff*Diff, axis= 0)).tolist()
     return ErrorList
     
+def estimateColorParameters(TrueColors, ActualColors):
+    # estimate color-correction parameters
+    colorMatrix = np.eye(3)
+    colorConstant = np.zeros([3,1])
+    colorGamma = np.ones([3,1])
+ 
+    Arg2 = np.zeros([9 + 3 + 3])
+    Arg2[:9] = colorMatrix.reshape([9])
+    Arg2[9:12] = colorConstant.reshape([3])
+    Arg2[12:15] = colorGamma.reshape([3])
+    
+    ArgRefined, _ = optimize.leastsq(getColorMatchingErrorVectorised, \
+            Arg2, args=(TrueColors, ActualColors), maxfev=10000)
+
+    colorMatrix = ArgRefined[:9].reshape([3,3])
+    colorConstant = ArgRefined[9:12].reshape([3,1])
+    colorGamma = ArgRefined[12:15]
+    return colorMatrix, colorConstant, colorGamma
+
 def correctColorVectorised(Image, ColorMatrix, ColorConstant, ColorGamma):
     Width, Height = Image.shape[1::-1]
     CapturedR = Image[:,:,0].reshape([1,Width*Height])
