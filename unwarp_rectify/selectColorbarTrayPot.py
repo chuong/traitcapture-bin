@@ -1,16 +1,11 @@
 """
-Created on Thu Dec 12 08:38:21 2013
+Created on Mon Jun 16 2014
  
-@author: Sukhbinder Singh
- 
-Simple QTpy and MatplotLib example with Zoom/Pan
- 
-Built on the example provided at
-How to embed matplotib in pyqt - for Dummies
- 
-http://stackoverflow.com/questions/12459811/how-to-embed-matplotib-in-pyqt-for-dummies
+@author: Chuong Nguyen, chuongnguyen@anu.edu.au
  
 """
+from __future__ import absolute_import, division, print_function
+
 import sys
 from PyQt4 import QtGui, QtCore
  
@@ -18,11 +13,13 @@ from matplotlib.backends.backend_qt4agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt4agg import NavigationToolbar2QTAgg as NavigationToolbar
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Cursor
- 
+
+import os
 import cv2
 import numpy as np
 import utils
 import cv2yml
+import yaml
  
 class Window(QtGui.QDialog):
     def __init__(self, parent=None):
@@ -66,6 +63,9 @@ class Window(QtGui.QDialog):
         self.saveColorcadButton = QtGui.QPushButton('&Save sel. col. card images')
         self.saveColorcadButton.clicked.connect(self.saveSelectedColorcardImages)
  
+        self.save2PipelineButton = QtGui.QPushButton('&Save as pipeline settings')
+        self.save2PipelineButton.clicked.connect(self.savePipelineSettings)
+ 
         self.zoomButton = QtGui.QPushButton('&Zoom')
         self.zoomButton.setCheckable(True)
         self.zoomButton.clicked.connect(self.zoom)
@@ -97,6 +97,7 @@ class Window(QtGui.QDialog):
         buttonlayout.addWidget(self.saveGeometriesButton)
         buttonlayout.addWidget(self.saveColorcadButton)
         buttonlayout.addWidget(self.saveTraysButton)
+        buttonlayout.addWidget(self.save2PipelineButton)
         buttonlayout.addWidget(self.status)
         buttonlayout.addWidget(self.mousePosition)
         rightWidget.setMaximumWidth(200)
@@ -120,6 +121,7 @@ class Window(QtGui.QDialog):
         self.plotRect = None
         self.plotImg = None
         self.image = None
+        self.potTemplate = None
         self.UndistMapX = None
         self.UndistMapY = None
         self.trayAspectRatio = 0.835
@@ -127,12 +129,17 @@ class Window(QtGui.QDialog):
         self.potAspectRatio = 1.0
         self.leftClicks = []
         
+        self.ImageSize = None
+        self.CameraMatrix = None
+        self.DistCoefs = None
+        
 #        # change cursor shape
 #        self.setCursor(QtGui.QCursor(QtCore.Qt.CrossCursor ))
         
         # Ouput parameters
         self.colorcardList = []
         self.trayList = []
+        self.potList = []
         self.rotationAngle = 0
         self.isDistortionCorrected = False
 
@@ -165,7 +172,7 @@ class Window(QtGui.QDialog):
          
     def loadImage(self):
         ''' load and show an image'''
-        fname = QtGui.QFileDialog.getOpenFileName(self, 'Open image', '/home/chuong/Data/phenocam/a_data/TimeStreams/Borevitz/BVZ0033/BVZ0033-GC02L~fullres-orig/2014/2014_05/2014_05_23/2014_05_23_08')
+        fname = QtGui.QFileDialog.getOpenFileName(self, 'Open image', '/mnt/phenocam/a_data/TimeStreams/BorevitzTest/BVZ0036/BVZ0036-GC02L~fullres-orig/2014/2014_06/2014_06_20/2014_06_20_12')
         self.status.append('Loading image...')
         app.processEvents()
         self.image = cv2.imread(str(fname))[:,:,::-1]
@@ -180,7 +187,7 @@ class Window(QtGui.QDialog):
 
         # Undistort image if mapping available
         if not self.isDistortionCorrected and self.UndistMapX != None and self.UndistMapY != None:
-            self.image = cv2.remap(self.image, self.UndistMapX, self.UndistMapY, cv2.INTER_CUBIC)
+            self.image = cv2.remap(self.image.astype(np.uint8), self.UndistMapX, self.UndistMapY, cv2.INTER_CUBIC)
             self.isDistortionCorrected = True
 
         if self.image != None:
@@ -239,15 +246,15 @@ class Window(QtGui.QDialog):
     def loadCamCalib(self):
         ''' load camera calibration image and show an image'''
         CalibFile = QtGui.QFileDialog.getOpenFileName(self, 'Open image', '/home/chuong/Workspace/traitcapture-bin/unwarp_rectify/data')
-        ImageSize, SquareSize, CameraMatrix, DistCoefs, RVecs, TVecs = utils.readCalibration(CalibFile)
+        self.ImageSize, SquareSize, self.CameraMatrix, self.DistCoefs, RVecs, TVecs = utils.readCalibration(CalibFile)
         self.status.append('Loaded camera parameters from ' + CalibFile) 
-        print('CameraMatrix =', CameraMatrix)
-        print('DistCoefs =', DistCoefs)
-        self.UndistMapX, self.UndistMapY = cv2.initUndistortRectifyMap(CameraMatrix, DistCoefs, \
-            None, CameraMatrix, ImageSize, cv2.CV_32FC1)    
+        print('CameraMatrix =', self.CameraMatrix)
+        print('DistCoefs =', self.DistCoefs)
+        self.UndistMapX, self.UndistMapY = cv2.initUndistortRectifyMap(self.CameraMatrix, self.DistCoefs, \
+            None, self.CameraMatrix, self.ImageSize, cv2.CV_32FC1)    
 
         if self.image != None:
-            self.image = cv2.remap(self.image, self.UndistMapX, self.UndistMapY, cv2.INTER_CUBIC)
+            self.image = cv2.remap(self.image.astype(np.uint8), self.UndistMapX, self.UndistMapY, cv2.INTER_CUBIC)
             self.isDistortionCorrected = True
             self.status.append('Corrected image distortion.') 
             if self.plotImg == None:
@@ -256,6 +263,15 @@ class Window(QtGui.QDialog):
                 self.plotImg.set_data(self.image)
             self.canvas.draw()
         
+#    def loadPotTemplate(self):
+#        ''' load pot template image'''
+#        fname = QtGui.QFileDialog.getOpenFileName(self, 'Open image', '/home/chuong/Workspace/traitcapture-bin/unwarp_rectify/data')
+#        self.status.append('Loading image...')
+#        app.processEvents()
+#        self.potTemplate = cv2.imread(str(fname))[:,:,::-1]
+#        if len(self.potList) > 0:
+            
+
     def saveSelectedGeometries(self):
         ''' save selected geometries'''
         fname = QtGui.QFileDialog.getSaveFileName(self, 'Save selected geometries', '/home/chuong/Workspace/traitcapture-bin/unwarp_rectify/data')
@@ -291,6 +307,92 @@ class Window(QtGui.QDialog):
         rectifiedColorcardImages = utils.rectifyRectImages(self.image, self.colorcardList, MedianSize = [medianWidth, medianHeight])
         for i,rectifiedImage in enumerate(rectifiedColorcardImages):
             cv2.imwrite(str(fname) %i, rectifiedImage)
+            
+    def savePipelineSettings(self):
+        ''' save to pipeline setting file'''
+        fname = QtGui.QFileDialog.getSaveFileName(self, 'Save selection to pipeline settings', '/home/chuong/Workspace/traitcapture-bin/unwarp_rectify/data')
+        settingPath = os.path.dirname(str(fname))
+        settings = []
+        if self.ImageSize != None and self.CameraMatrix != None and self.DistCoefs != None:
+            undistort = ['undistort', \
+                         {'mess': 'perform optical undistortion', \
+                          'cameraMatrix': self.CameraMatrix.tolist(), \
+                          'distortCoefs': self.DistCoefs.tolist(), \
+                          'imageSize': list(self.ImageSize),
+                          'rotationAngle': self.rotationAngle
+                         } \
+                        ]
+        else:
+            undistort = ['undistort', {'mess': '---skip optical undistortion---'}]
+        settings.append(undistort)
+        
+        if len(self.colorcardList) > 0:
+            medianSize = utils.getMedianRectSize(self.colorcardList)
+            capturedColorcards = utils.rectifyRectImages(self.image, self.colorcardList, medianSize)
+            colorCardFile = 'CapturedColorcard.png'
+            cv2.imwrite(os.path.join(settingPath, colorCardFile), capturedColorcards[0][:,:,::-1].astype(np.uint8))
+            colorcardColors, colorStd  = utils.getColorcardColors(capturedColorcards[0], GridSize = [6,4])
+            colorcardPosition, Width, Height, Angle = utils.getRectangleParamters(self.colorcardList[0])
+            colorcarddetect = ['colorcarddetect', \
+                               {'mess': '---perform color card detection---', \
+                                'colorcardFile': colorCardFile,\
+                                'colorcardPosition': colorcardPosition.tolist(),\
+                                'colorcardTrueColors': utils.CameraTrax_24ColorCard
+                               }
+                              ]
+        else:
+            colorcarddetect = ['colorcarddetect', {'mess': '---skip color card detection---'}]
+        settings.append(colorcarddetect)
+            
+        colorcorrect = ['colorcorrect', {'mess': '---perform color correction---'}]
+        settings.append(colorcorrect)
+
+        if len(self.trayList) > 0:
+            trayMedianSize = utils.getMedianRectSize(self.trayList)
+            trayImages = utils.rectifyRectImages(self.image, self.trayList, trayMedianSize)
+            colorcardColors, colorStd  = utils.getColorcardColors(capturedColorcards[0], GridSize = [6,4])
+            trayDict = {'mess': '---perform tray detection---'}
+            trayDict['trayNumber'] = len(self.trayList)
+            trayDict['trayFiles'] = 'Tray_%02d.png'
+            trayPositions = []
+            for i,tray in enumerate(trayImages):
+                cv2.imwrite(os.path.join(settingPath, trayDict['trayFiles'] %i), tray[:,:,::-1].astype(np.uint8))
+                trayPosition, Width, Height, Angle = utils.getRectangleParamters(self.trayList[i])
+                trayPositions.append(trayPosition.tolist())
+            trayDict['trayPositions'] = trayPositions
+            traydetect = ['traydetect', trayDict]
+        else:
+            traydetect = ['traydetect', {'mess': '---skip tray detection---'}]
+        settings.append(traydetect)
+
+        if len(self.potList) > 0:
+            trayMedianSize = utils.getMedianRectSize(self.trayList)
+            potPosition, Width, Height, Angle = utils.getRectangleParamters(self.potList[0])
+            Width, Height = int(Width), int(Height)
+            topLeft = [int(self.potList[0][0][0]), int(self.potList[0][0][1])]
+            self.potImage = self.image[topLeft[1]:topLeft[1]+Height, topLeft[0]:topLeft[0]+Width, :]
+            potFile = 'Pot.png'
+            cv2.imwrite(os.path.join(settingPath, potFile), self.potImage[:,:,::-1].astype(np.uint8))
+            potDict = {'mess': '---perform pot detection---'}
+            potDict['potPosition'] = potPosition.tolist()
+            potDict['potSize'] = [int(Width), int(Height)]
+            potDict['traySize'] = [int(trayMedianSize[0]), int(trayMedianSize[1])]
+            potDict['potFile'] = potFile
+            if self.potTemplate != None:
+                potTemplateFile = 'potTemplate.png'
+                cv2.imwrite(os.path.join(settingPath, potTemplateFile), self.potTemplate[:,:,::-1])
+                potDict['potTemplateFile'] = potTemplateFile
+            potdetect = ['potdetect', potDict]
+        else:
+            potdetect = ['potdetect', {'mess': '---skip pot detection---'}]
+        settings.append(potdetect)
+        
+        plantextract = ['plantextract', {'mess': '---perfrom plant biometrics extraction---'}]
+        settings.append(plantextract)
+        
+        with open(fname, 'w') as outfile:
+            outfile.write( yaml.dump(settings, default_flow_style=None) )
+
 
     def rotateImage90Degrees(self):
         if self.image == None:
